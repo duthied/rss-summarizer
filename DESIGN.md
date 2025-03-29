@@ -19,10 +19,19 @@ flowchart TD
 ## Database Schema
 
 ```sql
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE feeds (
     id INTEGER PRIMARY KEY,
-    url TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,
     name TEXT,
+    category_id INTEGER,
     update_interval INTEGER DEFAULT 60, -- Minutes between updates
     last_fetched TIMESTAMP,
     fetch_status INTEGER DEFAULT 0,     -- 0=success, 1=error
@@ -31,7 +40,8 @@ CREATE TABLE feeds (
     last_error TIMESTAMP,
     active INTEGER DEFAULT 1,           -- Boolean: 1=active, 0=inactive
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_id) REFERENCES categories(id)
 );
 
 CREATE TABLE posts (
@@ -50,13 +60,15 @@ CREATE TABLE posts (
 CREATE INDEX idx_posts_feed_id ON posts(feed_id);
 CREATE INDEX idx_posts_guid ON posts(guid);
 CREATE INDEX idx_feeds_last_fetched ON feeds(last_fetched);
+CREATE INDEX idx_feeds_active ON feeds(active);
+CREATE INDEX idx_feeds_category_id ON feeds(category_id);
 ```
 
 ## Core Components
 
 ### Database Handler
 - Manages connections to the SQLite database
-- Provides methods for CRUD operations on feeds and posts
+- Provides methods for CRUD operations on categories, feeds, and posts
 - Handles transaction management and error recovery
 
 ### Feed Validator
@@ -105,7 +117,6 @@ Example cron configuration:
 
 ## Future Enhancements
 - Web interface for feed management
-- Content filtering and categorization
 - Full-text search capabilities
 - Feed statistics and analytics
 - Email notifications for new posts

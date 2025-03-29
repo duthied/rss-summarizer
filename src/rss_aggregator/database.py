@@ -144,24 +144,127 @@ class Database:
             logger.error("Params: %s", params)
             raise
     
+    # Category operations
+    
+    def add_category(self, name, description=None):
+        """Add a new category to the database.
+        
+        Args:
+            name (str): Category name
+            description (str, optional): Category description
+            
+        Returns:
+            int: ID of the newly added category
+        """
+        query = """
+        INSERT INTO categories (name, description)
+        VALUES (?, ?)
+        """
+        return self.execute_update(query, (name, description))
+    
+    def get_category(self, category_id):
+        """Get a category by ID.
+        
+        Args:
+            category_id (int): Category ID
+            
+        Returns:
+            sqlite3.Row: Category data or None if not found
+        """
+        query = "SELECT * FROM categories WHERE id = ?"
+        results = self.execute_query(query, (category_id,))
+        return results[0] if results else None
+    
+    def get_category_by_name(self, name):
+        """Get a category by name.
+        
+        Args:
+            name (str): Category name
+            
+        Returns:
+            sqlite3.Row: Category data or None if not found
+        """
+        query = "SELECT * FROM categories WHERE name = ?"
+        results = self.execute_query(query, (name,))
+        return results[0] if results else None
+    
+    def get_all_categories(self):
+        """Get all categories.
+        
+        Returns:
+            list: List of category rows
+        """
+        query = "SELECT * FROM categories ORDER BY name"
+        return self.execute_query(query)
+    
+    def update_category(self, category_id, name=None, description=None):
+        """Update a category.
+        
+        Args:
+            category_id (int): Category ID
+            name (str, optional): New category name
+            description (str, optional): New category description
+            
+        Returns:
+            int: Number of rows affected
+        """
+        # Get current category data
+        category = self.get_category(category_id)
+        if not category:
+            return 0
+        
+        # Update with new values or keep existing ones
+        new_name = name if name is not None else category['name']
+        new_description = description if description is not None else category['description']
+        current_time = datetime.now().isoformat()
+        
+        query = """
+        UPDATE categories
+        SET name = ?, description = ?, updated_at = ?
+        WHERE id = ?
+        """
+        return self.execute_update(query, (new_name, new_description, current_time, category_id))
+    
+    def delete_category(self, category_id):
+        """Delete a category.
+        
+        Args:
+            category_id (int): Category ID
+            
+        Returns:
+            int: Number of rows affected
+        """
+        # First, set category_id to NULL for all feeds in this category
+        query = """
+        UPDATE feeds
+        SET category_id = NULL, updated_at = ?
+        WHERE category_id = ?
+        """
+        self.execute_update(query, (datetime.now().isoformat(), category_id))
+        
+        # Then delete the category
+        query = "DELETE FROM categories WHERE id = ?"
+        return self.execute_update(query, (category_id,))
+    
     # Feed operations
     
-    def add_feed(self, url, name=None, update_interval=60):
+    def add_feed(self, url, name=None, category_id=None, update_interval=60):
         """Add a new feed to the database.
         
         Args:
             url (str): Feed URL
             name (str, optional): Feed name
+            category_id (int, optional): Category ID
             update_interval (int, optional): Update interval in minutes
             
         Returns:
             int: ID of the newly added feed
         """
         query = """
-        INSERT INTO feeds (url, name, update_interval)
-        VALUES (?, ?, ?)
+        INSERT INTO feeds (url, name, category_id, update_interval)
+        VALUES (?, ?, ?, ?)
         """
-        return self.execute_update(query, (url, name, update_interval))
+        return self.execute_update(query, (url, name, category_id, update_interval))
     
     def get_feed(self, feed_id):
         """Get a feed by ID.
@@ -189,20 +292,34 @@ class Database:
         results = self.execute_query(query, (url,))
         return results[0] if results else None
     
-    def get_all_feeds(self, active_only=True):
-        """Get all feeds, optionally filtering for active only.
+    def get_all_feeds(self, active_only=True, category_id=None):
+        """Get all feeds, optionally filtering for active only and/or category.
         
         Args:
             active_only (bool): Whether to return only active feeds
+            category_id (int, optional): Filter by category ID
             
         Returns:
-            list: List of feed rows
+            list: List of feed rows with category information
         """
+        query_parts = ["SELECT f.*, c.name as category_name FROM feeds f"]
+        query_parts.append("LEFT JOIN categories c ON f.category_id = c.id")
+        
+        where_clauses = []
+        params = []
+        
         if active_only:
-            query = "SELECT * FROM feeds WHERE active = 1"
-        else:
-            query = "SELECT * FROM feeds"
-        return self.execute_query(query)
+            where_clauses.append("f.active = 1")
+        
+        if category_id is not None:
+            where_clauses.append("f.category_id = ?")
+            params.append(category_id)
+        
+        if where_clauses:
+            query_parts.append("WHERE " + " AND ".join(where_clauses))
+        
+        query = " ".join(query_parts)
+        return self.execute_query(query, tuple(params) if params else None)
     
     def get_due_feeds(self):
         """Get feeds that are due for processing based on their update interval.
@@ -361,21 +478,34 @@ class Database:
         """
         return self.execute_query(query, (feed_id, limit, offset))
     
-    def get_latest_posts(self, limit=50):
-        """Get the latest posts across all feeds.
+    def get_latest_posts(self, limit=50, category_id=None):
+        """Get the latest posts across all feeds, optionally filtering by category.
         
         Args:
             limit (int, optional): Maximum number of posts to return
+            category_id (int, optional): Filter by category ID
             
         Returns:
             list: List of post rows
         """
-        query = """
-        SELECT p.id, p.feed_id, p.title, p.link, p.guid, p.description, 
-               p.published_date, p.created_at, f.name as feed_name, f.url as feed_url
-        FROM posts p
-        JOIN feeds f ON p.feed_id = f.id
-        ORDER BY p.published_date DESC
-        LIMIT ?
-        """
-        return self.execute_query(query, (limit,))
+        query_parts = [
+            "SELECT p.id, p.feed_id, p.title, p.link, p.guid, p.description,",
+            "p.published_date, p.created_at, f.name as feed_name, f.url as feed_url,",
+            "c.name as category_name",
+            "FROM posts p",
+            "JOIN feeds f ON p.feed_id = f.id",
+            "LEFT JOIN categories c ON f.category_id = c.id"
+        ]
+        
+        params = []
+        
+        if category_id is not None:
+            query_parts.append("WHERE f.category_id = ?")
+            params.append(category_id)
+        
+        query_parts.append("ORDER BY p.published_date DESC")
+        query_parts.append("LIMIT ?")
+        params.append(limit)
+        
+        query = " ".join(query_parts)
+        return self.execute_query(query, tuple(params))
